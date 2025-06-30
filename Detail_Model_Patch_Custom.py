@@ -1,9 +1,9 @@
-import torch
+zimport torch
 import torch.nn as nn
 
 class ModelWrapper(nn.Module):
     """
-    A wrapper class that intercepts model calls and allows custom processing
+    A wrapper class that intercepts model calls and adds noise prediction modifications to give the user control over level of detail generated.
     """
     def __init__(self, original_model, scaling_factor, narrowness):
         super().__init__()
@@ -16,24 +16,20 @@ class ModelWrapper(nn.Module):
         return self.original_model
 
     def sin_schedule(self, x):
-        new_x = x / 1000 # (x - self.sigma_min) / (self.sigma_max - self.sigma_min)
+        # normalize the timestep to be between 0 and 1
+        new_x = x / 1000
+        # return the strength of the modification as according to the modification schedule
         return torch.sin(new_x * torch.pi) ** self.narrowness
 
     def forward(self, *args, **kwargs):
-        # PRE-PROCESSING SPACE - Add your custom code here
-        # You can modify inputs, log information, etc.
-        # Example: print(f"Model called with args: {len(args)}, kwargs: {list(kwargs.keys())}")
 
         # Call the original model
         result = self.original_model(*args, **kwargs)
 
-        print(args[1])
+        # extract the current timestep to determine what point in the modification schedule to sample
         timestep = args[1][0]
-        print(timestep)
+        # use the sin() based scheduler to make the modification. I might add some more schedulers in the future as they all have different effects on image composition and detail level, this one just seems the most versatile
         result = result + (result * self.sin_schedule(timestep) * self.scaling_factor)
-        # POST-PROCESSING SPACE - Add your custom code here
-        # You can modify outputs, save results, apply transformations, etc.
-        # Example: print(f"Model output shape: {result.shape if hasattr(result, 'shape') else type(result)}")
 
         return result
 
@@ -51,7 +47,7 @@ class ModelWrapper(nn.Module):
 
 class DetailModelWrapperNode:
     """
-    A ComfyUI node that wraps a model with custom processing capabilities
+    A ComfyUI node that wraps a model with noise prediction modifications to give the user control over level of detail generated
     """
 
     @classmethod
@@ -61,7 +57,7 @@ class DetailModelWrapperNode:
                 "model": ("MODEL", ),
                 "scaling_factor": ("FLOAT", {"default": 0.05, "min": -1.0, "max": 1.0, "step": 0.005}),
                 "scaling_narrowness": ("FLOAT", ),
-                # "effect_depth": ("FLOAT", {"default": 0.5, "min": 0, "max": 1.0, "step": 0.05})
+                # "effect_depth": ("FLOAT", {"default": 0.5, "min": 0, "max": 1.0, "step": 0.05}) #  TODO: allow the user to control the depth of the schedule peak.
             }
         }
 
@@ -72,7 +68,7 @@ class DetailModelWrapperNode:
 
     def unwrap_model(self, wrapped_model):
         """
-        Unwraps the input model with custom processing capabilities
+        Unwraps the input model with the detail wrapper applied
         """
 
         unwrapped_model = wrapped_model.clone()
@@ -95,7 +91,7 @@ class DetailModelWrapperNode:
 
     def wrap_model(self, model, scaling_factor, scaling_narrowness):
         """
-        Wraps the input model with custom processing capabilities
+        Wraps the input model with noise prediction modifications to give the user control over level of detail generated
         """
 
         model = self.unwrap_model(model.clone())
@@ -118,7 +114,7 @@ class DetailModelWrapperNode:
 
 class DetailModelUnwrapperNode:
     """
-    A ComfyUI node that wraps a model with custom processing capabilities
+    A ComfyUI node that unwraps a model with the detail wrapper applied
     """
 
     @classmethod
@@ -136,7 +132,7 @@ class DetailModelUnwrapperNode:
 
     def unwrap_model(self, model):
         """
-        Unwraps the input model with custom processing capabilities
+        Unwraps the input model with the detail wrapper applied
         """
 
         unwrapped_model = model.clone()
