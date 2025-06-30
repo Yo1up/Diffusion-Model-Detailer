@@ -5,13 +5,13 @@ ComfyUI nodes that allow the user to control the generation of diffusion models 
 put the python script directly in the custom_nodes folder. if you place it in a folder it won't load properly.
 
 # Planned Features
-[ ] Add a "depth" parameter to alter when the scheduled noise injection/removal peaks.
+- [ ] Add a "depth" parameter to alter when the scheduled noise injection/removal peaks.
 
-[ ] Migrate to using the proper model patcher comfy commands.
+- [ ] Migrate to using the proper model patcher comfy commands.
 
-[ ] Make the nodes able to run inside a folder so comfy manager will be able to install the nodes automatically.
+- [ ] Make the nodes able to run inside a folder so comfy manager will be able to install the nodes automatically.
 
-[ ] Add some example image grids
+- [ ] Add some example image grids
 
-[ ] Add some example workflows
+- [ ] Add some example workflows
 
