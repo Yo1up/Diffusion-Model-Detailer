@@ -1,4 +1,4 @@
-zimport torch
+import torch
 import torch.nn as nn
 
 class ModelWrapper(nn.Module):
