@@ -1,5 +1,4 @@
-import DetailModelWrapperNode from Detail_Model_Patch_Custom
-import DetailModelUnwrapperNode from Detail_Model_Patch_Custom
+from .Detail_Model_Patch_Custom import DetailModelWrapperNode, DetailModelUnwrapperNode
 
 # Node registration for ComfyUI
 NODE_CLASS_MAPPINGS = {
