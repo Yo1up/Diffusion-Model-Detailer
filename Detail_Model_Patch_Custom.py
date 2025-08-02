@@ -1,165 +1,108 @@
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
+import comfy.model_patcher
+import comfy.samplers
+import math
 
-class ModelWrapper(nn.Module):
+class Detailer:
     """
-    A wrapper class that intercepts model calls and adds noise prediction modifications to give the user control over level of detail generated.
-    """
-    def __init__(self, original_model, scaling_factor, narrowness):
-        super().__init__()
-        self.original_model = original_model
-        self.narrowness = narrowness
-        self.scaling_factor = scaling_factor
-        self._is_wrapped = True
+    A ComfyUI node that uses the `set_model_unet_function_wrapper` hook to precisely modify
+    the raw noise prediction output from the UNet model. This allows for fine-grained
+    control over detail before or during the CFG calculation.
 
-    def unwrap(self):
-        return self.original_model
-
-    def sin_schedule(self, x):
-        # normalize the timestep to be between 0 and 1
-        new_x = x / 1000
-        # return the strength of the modification as according to the modification schedule
-        return torch.sin(new_x * torch.pi) ** self.narrowness
-
-    def forward(self, *args, **kwargs):
-
-        # Call the original model
-        result = self.original_model(*args, **kwargs)
-
-        # extract the current timestep to determine what point in the modification schedule to sample
-        timestep = args[1][0]
-        # use the sin() based scheduler to make the modification. I might add some more schedulers in the future as they all have different effects on image composition and detail level, this one just seems the most versatile
-        result = result + (result * self.sin_schedule(timestep) * self.scaling_factor)
-
-        return result
-
-    def __getattribute__(self, name):
-        # Always use direct access for internal stuff
-        if name in {"original_model", "scaling_factor", "narrowness", "_is_wrapped", "unwrap"}:
-            return object.__getattribute__(self, name)
-        try:
-            return object.__getattribute__(self, name)
-        except AttributeError:
-            # fallback to wrapped model
-            return getattr(self.original_model, name)
-
-
-
-class DetailModelWrapperNode:
-    """
-    A ComfyUI node that wraps a model with noise prediction modifications to give the user control over level of detail generated
+    - A positive `scaling_factor` amplifies details by increasing the residual noise in the output.
+    - A negative `scaling_factor` smoothens details by dampening the residual noise in the output.
     """
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": ("MODEL", ),
-                "scaling_factor": ("FLOAT", {"default": 0.05, "min": -1.0, "max": 1.0, "step": 0.005}),
-                "scaling_narrowness": ("FLOAT", ),
-                # "effect_depth": ("FLOAT", {"default": 0.5, "min": 0, "max": 1.0, "step": 0.05}) #  TODO: allow the user to control the depth of the schedule peak.
+                "model": ("MODEL",),
+                "scaling_factor": ("FLOAT", {
+                    "default": 0.05,
+                    "min": -1.0,
+                    "max": 1.0,
+                    "step": 0.005,
+                    "display": "slider",
+                    "tooltip": "Positive values increase detail, negative values reduce detail."
+                }),
+                "scaling_narrowness": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 10.0,
+                    "step": 0.1,
+                    "display": "slider",
+                    "tooltip": "Controls the focus of the scaling effect within the sampling process (higher = narrower peak)."
+                }),
             }
         }
 
     RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("wrapped_model",)
-    FUNCTION = "wrap_model"
-    CATEGORY = "model_processing"
+    FUNCTION = "patch"
+    CATEGORY = "model_patches/details" # This defines where it appears in the ComfyUI menu
 
-    def unwrap_model(self, wrapped_model):
+    def patch(self, model, scaling_factor, scaling_narrowness):
         """
-        Unwraps the input model with the detail wrapper applied
-        """
-
-        unwrapped_model = wrapped_model.clone()
-
-        # Get the actual model object (usually under 'model' attribute)
-        if hasattr(wrapped_model, 'model') and hasattr(wrapped_model.model, 'diffusion_model') and hasattr(wrapped_model.model.diffusion_model, "unwrap"):
-            # Wrap the diffusion model (for SD models)
-            unwrapped_model.model.diffusion_model = wrapped_model.model.diffusion_model.unwrap()
-        elif hasattr(wrapped_model, 'model') and hasattr(wrapped_model.model, "unwrap"):
-            # Wrap the main model
-            unwrapped_model.model = wrapped_model.model.unwrap()
-        elif hasattr(wrapped_model, "unwrap"):
-            # Unwrap the whole object
-            unwrapped_model = wrapped_model.unwrap()
-        else:
-            # Fallback to passing model straight through if no unwrapper can be found.
-            unwrapped_model = wrapped_model
-
-        return (unwrapped_model,)
-
-    def wrap_model(self, model, scaling_factor, scaling_narrowness):
-        """
-        Wraps the input model with noise prediction modifications to give the user control over level of detail generated
+        Applies a patch to the model's UNet function to modify noise predictions
+        based on a sine wave schedule and a scaling factor.
         """
 
-        model = self.unwrap_model(model.clone())
+        # we scale the user input to make it an acceptable sigma modification so the user doesn't have to work with very small numbers'
+        actual_scaling_factor = scaling_factor * 0.05
 
-        # Clone the model to avoid modifying the original
-        wrapped_model = model[0].clone()
+        def sin_schedule_for_unet(timestep_tensor, current_sigmas):
+            """
+            Calculates a scaling multiplier based on the current timestep (noise level).
+            This function creates a sine wave curve across the sampling steps,
+            allowing the effect to be strongest in the middle of the process.
+            """
+            # ComfyUI's `model.apply_model`
+            # typically passes the current 'sigma' value as the 't' (timestep_tensor) argument.
+            boolean_mask = (timestep_tensor.item() == current_sigmas)
+            steps = len(current_sigmas) - 1
+            step = torch.argwhere(boolean_mask)
+            current_sigmas = timestep_tensor
 
-        # Get the actual model object (usually under 'model' attribute)
-        if hasattr(wrapped_model, 'model') and hasattr(wrapped_model.model, 'diffusion_model'):
-            # Wrap the diffusion model (for SD models)
-            wrapped_model.model.diffusion_model = ModelWrapper(wrapped_model.model.diffusion_model, scaling_factor, scaling_narrowness)
-        elif hasattr(wrapped_model, 'model'):
-            # Wrap the main model
-            wrapped_model.model = ModelWrapper(wrapped_model.model, scaling_factor, scaling_narrowness)
-        else:
-            # Fallback: wrap the entire model object
-            wrapped_model = ModelWrapper(wrapped_model, scaling_factor, scaling_narrowness)
+            normalized_progress = step / steps
 
-        return (wrapped_model,)
+            # Clamp the normalized sigma to ensure it stays within [0, 1] just in case my code is too jank
+            normalized_progress_clamped = torch.clamp(normalized_progress, 0.0, 1.0)
 
-class DetailModelUnwrapperNode:
-    """
-    A ComfyUI node that unwraps a model with the detail wrapper applied
-    """
+            # Apply the sine wave schedule. The `scaling_narrowness`
+            # controls the sharpness of the peak of the sine wave.
+            return torch.sin(normalized_progress_clamped * math.pi) ** scaling_narrowness
 
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "model": ("MODEL", ),
-            }
-        }
+        def apply_detailer(apply_model, args):
+            input_x = args["input"]
+            timestep = args["timestep"]
+            cond_or_uncond = args["cond_or_uncond"]
+            c = args["c"]
 
-    RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("unwrapped_model",)
-    FUNCTION = "unwrap_model"
-    CATEGORY = "model_processing"
 
-    def unwrap_model(self, model):
-        """
-        Unwraps the input model with the detail wrapper applied
-        """
+            mod_strength = sin_schedule_for_unet(timestep[0], c["transformer_options"]["sample_sigmas"])
+            timestep[0] = torch.mul(timestep[0], (1 + (mod_strength * actual_scaling_factor)))
 
-        unwrapped_model = model.clone()
+            noise_pred = apply_model(input_x, timestep, **c)
 
-        # Get the actual model object (usually under 'model' attribute)
-        if hasattr(model, 'model') and hasattr(model.model, 'diffusion_model') and hasattr(model.model.diffusion_model, "unwrap"):
-            # Wrap the diffusion model (for SD models)
-            unwrapped_model.model.diffusion_model = model.model.diffusion_model.unwrap()
-        elif hasattr(model, 'model') and hasattr(model.model, "unwrap"):
-            # Wrap the main model
-            unwrapped_model.model = model.model.unwrap()
-        elif hasattr(model, "unwrap"):
-            # Unwrap the whole object
-            unwrapped_model = model.unwrap()
-        else:
-            # Fallback to passing model straight through if no unwrapper can be found.
-            unwrapped_model = model
+            return noise_pred
 
-        return (unwrapped_model,)
+        # Clone the model to ensure that this patch only affects the current branch
+        # of the ComfyUI workflow and does not modify the original model in place. idk if this is really necessary but I don't think it can hurt.
+        model_clone = model.clone()
 
-# Node registration for ComfyUI
+        # Apply the custom `apply_detailer` method using ComfyUI's patching mechanism.
+        # This hooks into the model's internal UNet forward pass.
+        model_clone.set_model_unet_function_wrapper(apply_detailer)
+
+        return (model_clone,)
+
+# Node registration for ComfyUI.
+# These dictionaries tell ComfyUI how to display and interact with your custom node.
 NODE_CLASS_MAPPINGS = {
-    "DetailModelWrapperNode": DetailModelWrapperNode,
-    "DetailModelUnwrapperNode": DetailModelUnwrapperNode
+    "Detailer": Detailer,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "DetailModelWrapperNode": "Detail Model Wrapper",
-    "DetailModelUnwrapperNode": "Detail Model Unwrapper"
+    "Detailer": "Detailer (UNet Patch)",
 }
