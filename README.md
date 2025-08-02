@@ -17,7 +17,7 @@ You can now install it with the ComfyUI manager. if you experience any issues pl
 
 - [ ] Migrate to using the proper model patcher comfy commands.
 
-- [*] Make the nodes able to run inside a folder so comfy manager will be able to install the nodes automatically.
+- [X] Make the nodes able to run inside a folder so comfy manager will be able to install the nodes automatically.
 
 - [ ] Add some example image grids
 
