@@ -1,12 +1,10 @@
-from .Detail_Model_Patch_Custom import DetailModelWrapperNode, DetailModelUnwrapperNode
+from .Detail_Model_Patch_Custom import Detailer
 
 # Node registration for ComfyUI
 NODE_CLASS_MAPPINGS = {
-    "DetailModelWrapperNode": DetailModelWrapperNode,
-    "DetailModelUnwrapperNode": DetailModelUnwrapperNode
+    "Detailer": Detailer,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "DetailModelWrapperNode": "Detail Model Wrapper",
-    "DetailModelUnwrapperNode": "Detail Model Unwrapper"
+    "Detailer": "Detailer (UNet Patch)",
 }
