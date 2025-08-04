@@ -20,7 +20,7 @@ class Detailer:
             "required": {
                 "model": ("MODEL",),
                 "scaling_factor": ("FLOAT", {
-                    "default": 0.05,
+                    "default": 0.25,
                     "min": -1.0,
                     "max": 1.0,
                     "step": 0.005,
@@ -28,9 +28,9 @@ class Detailer:
                     "tooltip": "Positive values increase detail, negative values reduce detail."
                 }),
                 "scaling_narrowness": ("FLOAT", {
-                    "default": 1.0,
+                    "default": 7.0,
                     "min": 0.1,
-                    "max": 10.0,
+                    "max": 14.0,
                     "step": 0.1,
                     "display": "slider",
                     "tooltip": "Controls the focus of the scaling effect within the sampling process (higher = narrower peak)."
